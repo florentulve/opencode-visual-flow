@@ -1,6 +1,6 @@
 {
   "name": "opencode-visual-flow",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "OpenCode plugin: live HTML dashboard for agent flow, cooperation, and task progression — hook into any session to watch tools and output stream in real time",
   "license": "MIT",
   "author": "Florent Ulvé <florent.ulve@protonmail.com>",

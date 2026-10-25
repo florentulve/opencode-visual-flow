@@ -11,7 +11,7 @@
 import { Plugin } from "@opencode/plugin"
 import { Flow } from "./rpc"
 import { FlowStore } from "./flow"
-import { startSidecar } from "./sidecar"
+import { serviceEndpoint, startSidecar } from "./sidecar"
 
 export default Plugin.define({
   id: "opencode-visual-flow",
@@ -40,7 +40,26 @@ export default Plugin.define({
         cursor = page?.cursor?.next ?? undefined
         if (!cursor) break
       }
-      store.seed(sessions)
+      // server truth on what is running right now (guards against missed
+      // events during reloads — sessions mid-run are marked running)
+      let active: Record<string, unknown> = {}
+      let activeKnown = false
+      try {
+        const ep = serviceEndpoint()
+        if (ep.url) {
+          const r = await fetch(ep.url.replace(/\/+$/, "") + "/api/session/active", {
+            headers: ep.authorization ? { authorization: ep.authorization } : {},
+            signal: AbortSignal.timeout(5000),
+          })
+          if (r.ok) {
+            active = (await r.json())?.data ?? {}
+            activeKnown = true
+          }
+        }
+      } catch (e) {
+        console.error("[flow] active fetch failed:", e)
+      }
+      store.seed(sessions, active, activeKnown)
     } catch (e) {
       console.error("[flow] seed failed:", e)
     }
@@ -142,6 +161,7 @@ export default Plugin.define({
       port: (ctx.options as any)?.port ?? 7337,
       directory: ctx.location.directory,
       meta: () => ({ rev: store.model.rev, nodes: Object.keys(store.model.nodes).length }),
+      snapshot: () => store.snapshot(),
     })
 
     console.log(

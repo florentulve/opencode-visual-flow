@@ -43,7 +43,12 @@
   .chip.done { color:#4ade80; border-color:rgba(74,222,128,.35); }
   .chip.failed { color:#f87171; border-color:rgba(248,113,113,.4); }
   .chip.idle, .chip.queued { color:#5b6472; }
-  .tag { flex:none; color:#5b6472; font-size:9.5px; border:1px solid #2d3340; border-radius:8px; padding:0 6px; }
+  .proj { flex:none; font-size:10.5px; font-weight:600; padding:1px 9px; border-radius:9px; border:1px solid;
+          letter-spacing:.02em; cursor:pointer; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .proj.on { outline:1px solid currentColor; }
+  .pbar { display:flex; align-items:center; gap:9px; margin-bottom:9px; color:#8b93a3; font-size:11px; }
+  .pbar b { color:#e8ecf3; }
+  .pbar .mini { pointer-events:auto; }
   .meta { margin-left:auto; color:#8b93a3; font-size:10.5px; font-variant-numeric:tabular-nums; flex:none; }
   .sub { color:#8b93a3; font-size:11px; margin-top:3px; min-height:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .indent { margin-left:22px; position:relative; }
@@ -118,6 +123,11 @@ const hhmmss = t => hhmm(t) + ":" + String(new Date(t).getSeconds()).padStart(2,
 const agentLabel = n => !n.agent || n.agent === "?" ? "unknown" : n.agent
 const titleOf = n => (!n.title || n.title === n.id) ? "session " + n.id.slice(-6) : n.title
 const basename = d => String(d ?? "").split("/").filter(Boolean).pop() || String(d ?? "")
+const projectColor = name => {
+  let h = 0
+  for (let i = 0; i < String(name).length; i++) h = (h * 31 + String(name).charCodeAt(i)) >>> 0
+  return `hsl(${h % 360}, 55%, 66%)`
+}
 const isBusy = n => n.status === "running" || n.status === "waiting"
 const durOf = n => n.startedAt ? ((n.endedAt ?? Date.now()) - n.startedAt) : null
 
@@ -127,8 +137,18 @@ let useSnapshotFallback = false
 let es = null
 let renderTimer = null
 let showAllOld = false
+let projectFilter = null   // directory string or null = all projects
 let expanded = new Set()
 try { expanded = new Set(JSON.parse(localStorage.getItem("flow.expanded") || "[]")) } catch {}
+// deep-link: ?expand=<sessionID> (repeatable) opens feeds without persisting
+// ?static=1 renders one snapshot and skips the live loop (embedding/screenshots)
+let STATIC = false
+try { STATIC = new URLSearchParams(location.search).has("static") } catch {}
+try {
+  for (const id of new URLSearchParams(location.search).getAll("expand")) {
+    if (id) expanded.add(id)
+  }
+} catch {}
 const saveExpanded = () => localStorage.setItem("flow.expanded", JSON.stringify([...expanded]))
 
 // ------------------------------------------------------------- data access
@@ -203,8 +223,10 @@ function connect() {
   } catch { setConn("offline") }
 }
 
-setInterval(() => fetchSnapshot().catch(fail), 5000)
-connect()
+if (!STATIC) {
+  setInterval(() => fetchSnapshot().catch(fail), 5000)
+  connect()
+}
 fetchSnapshot().then(() => setConn("live")).catch(() => {
   useSnapshotFallback = true
   fetchSnapshot().then(() => setConn("live")).catch(() => setConn("offline"))
@@ -213,6 +235,15 @@ fetchSnapshot().then(() => setConn("live")).catch(() => {
 // click: toggle the hook-in feed
 document.getElementById("list").addEventListener("click", e => {
   if (e.target.closest("[data-more]")) { showAllOld = true; render(); return }
+  const clear = e.target.closest("[data-clearproj]")
+  if (clear) { projectFilter = null; render(); return }
+  const proj = e.target.closest("[data-proj]")
+  if (proj) {
+    const dir = proj.dataset.proj || null
+    projectFilter = projectFilter === dir ? null : dir
+    render()
+    return
+  }
   const row = e.target.closest("[data-toggle]")
   if (!row) return
   const id = row.dataset.toggle
@@ -243,10 +274,11 @@ function render() {
 function renderTotals() {
   const ns = nodes()
   const running = ns.filter(isBusy).length
+  const projects = new Set(ns.filter(n => n.dir).map(n => n.dir)).size
   const tok = ns.reduce((t, n) => t + (n.tokens?.input ?? 0) + (n.tokens?.output ?? 0) + (n.tokens?.reasoning ?? 0), 0)
   const cost = ns.reduce((t, n) => t + (n.cost ?? 0), 0)
   document.getElementById("totals").innerHTML =
-    `sessions <b>${ns.length}</b> · running <b>${running}</b> · tokens <b>${kfmt(tok)}</b> · cost <b>$${cost.toFixed(2)}</b> · rev <b>${model.rev ?? 0}</b>`
+    `projects <b>${projects}</b> · sessions <b>${ns.length}</b> · running <b>${running}</b> · tokens <b>${kfmt(tok)}</b> · cost <b>$${cost.toFixed(2)}</b> · rev <b>${model.rev ?? 0}</b>`
 }
 
 // preserve scroll positions of open feeds/output across re-render
@@ -285,12 +317,10 @@ function renderList() {
   const treeRec = r => Math.max(r.updatedAt ?? 0, ...members(r).map(m => m.updatedAt ?? 0))
   const treeFull = r => treeBusy(r) || treeRec(r) > now - RECENT_MS || members(r).some(m => expanded.has(m.id))
 
-  const ordered = roots.slice().sort((a, b) => (treeBusy(b) - treeBusy(a)) || (treeRec(b) - treeRec(a)))
+  // project filter: keep whole trees whose root belongs to the project
+  const rootSet = projectFilter ? roots.filter(r => (r.dir ?? "") === projectFilter) : roots
 
-  // project tags: only when sessions span multiple locations
-  const dirs = new Set()
-  for (const n of ns) if (n.dir) dirs.add(basename(n.dir))
-  const multiProject = dirs.size > 1
+  const ordered = rootSet.slice().sort((a, b) => (treeBusy(b) - treeBusy(a)) || (treeRec(b) - treeRec(a)))
 
   const rows = []       // {n, depth, compact}
   let compactUsed = 0, hiddenOld = 0
@@ -308,26 +338,36 @@ function renderList() {
   }
 
   const scrollState = captureScroll()
-  let html = rows.map(({ n, depth, compact }) => rowHTML(n, depth, compact, kids, multiProject)).join("")
+  let html = ""
+  if (projectFilter) {
+    html += `<div class="pbar">project <b>${esc(basename(projectFilter))}</b>` +
+      `<button class="mini" data-clearproj="1">✕ all projects</button></div>`
+  }
+  html += rows.map(({ n, depth, compact }) => rowHTML(n, depth, compact, kids)).join("")
   if (hiddenOld > 0) html += `<div class="more" data-more="1">show ${hiddenOld} older sessions</div>`
   el.innerHTML = html
   restoreScroll(scrollState)
 }
 
-function rowHTML(n, depth, compact, kids, multiProject) {
+function rowHTML(n, depth, compact, kids) {
   const open = expanded.has(n.id)
   const color = STATUS_COLOR[n.status] ?? "#5b6472"
   const busy = isBusy(n)
   const childRows = (kids.get(n.id) ?? []).length
   const dur = durOf(n)
   const durTxt = dur != null ? (dur > 60_000 ? Math.round(dur / 60_000) + "m" : Math.round(dur / 1000) + "s") : ""
-  const tag = multiProject && n.dir ? `<span class="tag" title="${esc(n.dir)}">${esc(basename(n.dir))}</span>` : ""
+  const pname = n.dir ? basename(n.dir) : "unknown"
+  const pcol = projectColor(pname)
+  const proj = depth === 0
+    ? `<span class="proj ${projectFilter === (n.dir ?? "") ? "on" : ""}" data-proj="${esc(n.dir ?? "")}" ` +
+      `style="color:${pcol};border-color:${pcol}55" title="${esc(n.dir ?? "unknown project")} — click to filter">${esc(short(pname, 24))}</span>`
+    : ""
 
   let inner = `<div class="top">` +
     `<span class="dot" style="background:${color}${busy ? ";box-shadow:0 0 6px " + color : ""}"></span>` +
+    proj +
     `<b>${esc(agentLabel(n))}</b>` +
-    `<span class="title" title="${esc(titleOf(n))}">${esc(short(titleOf(n), 64))}</span>` +
-    tag +
+    `<span class="title" title="${esc(titleOf(n))}">${esc(short(titleOf(n), 56))}</span>` +
     `<span class="chip ${esc(n.status)}">${esc(n.status)}${durTxt && busy ? " " + durTxt : ""}</span>` +
     `<span class="meta">${kfmt(n.tokens?.input ?? 0)}→${kfmt(n.tokens?.output ?? 0)} tok · $${(n.cost ?? 0).toFixed(3)}${compact ? "" : durTxt && !busy ? " · " + durTxt : ""}${childRows ? " · " + childRows + "▸" : ""}</span>` +
     `</div>`

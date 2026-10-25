@@ -81,6 +81,8 @@ const MAX_PENDING = 256
 
 const REVIEW_AGENT = /review|critic|synthes/i
 const RUNNINGISH: ReadonlySet<FlowStatus> = new Set(["running", "waiting", "queued"])
+// states that live activity (tool start, text streaming) proves stale
+const STALE_STATUSES: ReadonlySet<FlowStatus> = new Set(["done", "failed", "idle", "interrupted", "queued"])
 
 function zeroTokens() {
   return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
@@ -193,7 +195,21 @@ export class FlowStore {
     return this.model.nodes[id]
   }
 
+  // The RPC layer JSON-validates the output: strip any own `undefined` values
+  // (e.g. deleted optional fields) before handing the model out.
   snapshot(): FlowModel {
+    const clean = (o: any) => {
+      for (const k of Object.keys(o)) {
+        if (o[k] === undefined) delete o[k]
+        else if (o[k] && typeof o[k] === "object") clean(o[k])
+      }
+    }
+    for (const n of Object.values(this.model.nodes)) {
+      clean(n)
+      for (const t of n.tasks) clean(t)
+    }
+    for (const t of this.model.ticks) clean(t)
+    for (const e of this.model.edges) clean(e)
     return this.model
   }
 
@@ -221,7 +237,7 @@ export class FlowStore {
 
   // Backfill: sessions that predate this plugin load. Stored task/verdict/
   // lastText state wins; identity + usage come from the session info.
-  seed(list: any[], _active: Record<string, unknown> = {}) {
+  seed(list: any[], active: Record<string, unknown> = {}, activeKnown = false) {
     for (const s of list) {
       if (!s?.id || typeof s.id !== "string") continue
       const at = s.time?.created ?? Date.now()
@@ -248,10 +264,13 @@ export class FlowStore {
           cacheWrite: s.tokens.cache?.write ?? node.tokens.cacheWrite ?? 0,
         }
       }
-      if (s.outcome === "succeeded") node.status = "done"
+      const isActive = activeKnown && active[s.id] !== undefined
+      if (isActive) node.status = "running"
+      else if (s.outcome === "succeeded") node.status = "done"
       else if (s.outcome === "failed") node.status = "failed"
       else if (s.outcome === "interrupted") node.status = "interrupted"
       else if (!stored || node.status === "queued") node.status = "idle"
+      else if (activeKnown && node.status === "running") node.status = "idle" // stale after restart
       this.known.add(s.id)
     }
     this.bump()
@@ -271,7 +290,8 @@ export class FlowStore {
     else if (action === "progress") entry.state = entry.state === "failed" ? "failed" : "active"
     else if (action === "done") entry.state = "done"
     else if (action === "fail") entry.state = "failed"
-    entry.detail = detail
+    if (detail === undefined) delete entry.detail
+    else entry.detail = detail
     entry.at = at
     if (node.tasks.length > MAX_TASKS) node.tasks.splice(0, node.tasks.length - MAX_TASKS)
     this.bump()
@@ -319,6 +339,8 @@ export class FlowStore {
         const node = this.ensure(sid, at)
         node.status = "running"
         node.startedAt = at
+        delete node.endedAt // must not own undefined values: RPC output is JSON-validated
+        delete node.error // fresh run supersedes any previous step error
         this.onActivity?.(sid, "status", { status: "running" })
         handled = true
         break
@@ -345,9 +367,16 @@ export class FlowStore {
       case "session.execution.interrupted": {
         if (!sid) break
         const node = this.ensure(sid, at)
-        node.status = "interrupted"
-        node.endedAt = at
-        this.onActivity?.(sid, "status", { status: "interrupted" })
+        // "superseded" always precedes a replacement execution — the following
+        // execution.started/step events carry the real state, so don't flip the
+        // row to a terminal-looking status for it.
+        if (data.reason !== "superseded") {
+          node.status = "interrupted"
+          node.endedAt = at
+          this.onActivity?.(sid, "status", { status: "interrupted" })
+        } else {
+          delete node.endedAt
+        }
         handled = true
         break
       }
@@ -384,7 +413,10 @@ export class FlowStore {
         if (!sid || !this.known.has(sid)) break
         const node = this.ensure(sid, at)
         node.steps++
-        if (node.status !== "running" && node.status !== "done" && node.status !== "failed") node.status = "running"
+        delete node.error // session made progress; a previous step error is stale
+        const prev = node.status
+        node.status = "running" // a step starting IS execution — overrides stale done/failed/idle
+        if (prev !== node.status) this.onActivity?.(sid, "status", { status: node.status })
         this.onActivity?.(sid, "step", { phase: "started" })
         handled = true
         break
@@ -392,8 +424,14 @@ export class FlowStore {
       case "session.step.failed": {
         if (!sid) break
         const node = this.model.nodes[sid]
-        if (node && data.error?.message) {
-          node.error = String(data.error.message).slice(0, 200)
+        if (!node) break
+        const etype = String(data.error?.type ?? "")
+        const emsg = String(data.error?.message ?? "")
+        // "aborted"/"Step interrupted" is routine steer/interrupt control flow,
+        // not a failure — record only real step errors.
+        if (etype === "aborted" || /abort|interrupt/i.test(emsg)) break
+        if (data.error?.message) {
+          node.error = emsg.slice(0, 200)
           this.model.errors.push(`[${node.agent}] ${node.error}`)
           if (this.model.errors.length > MAX_ERRORS) this.model.errors.splice(0, this.model.errors.length - MAX_ERRORS)
           this.onActivity?.(sid, "step", { phase: "failed", error: node.error })
@@ -403,6 +441,7 @@ export class FlowStore {
       }
       case "session.tool.input.started": {
         if (!sid || !this.known.has(sid)) break
+        this.recover(sid)
         const node = this.ensure(sid, at)
         this.pendingInput.set(data.id, { name: data.name })
         if (this.pendingInput.size > MAX_PENDING) {
@@ -427,6 +466,7 @@ export class FlowStore {
       }
       case "session.tool.called": {
         if (!sid || !this.known.has(sid)) break
+        this.recover(sid)
         const node = this.ensure(sid, at)
         let p = this.pendingInput.get(data.id)
         if (!p) {
@@ -503,6 +543,7 @@ export class FlowStore {
         if (!sid) break
         const node = this.model.nodes[sid]
         if (!node) break
+        this.recover(sid)
         if (typeof data.delta === "string") {
           node.lastText = (node.lastText ?? "") + data.delta
           if (node.lastText.length > MAX_TEXT) node.lastText = node.lastText.slice(-MAX_TEXT)
@@ -516,6 +557,7 @@ export class FlowStore {
         if (!sid) break
         const node = this.model.nodes[sid]
         if (!node || typeof data.text !== "string") break
+        this.recover(sid)
         node.lastText = data.text.slice(0, MAX_TEXT)
         if (REVIEW_AGENT.test(node.agent)) {
           const { verdict, flags } = extractVerdict(data.text)
@@ -588,6 +630,18 @@ export class FlowStore {
   }
 
   // ------------------------------------------------------------------ private
+
+  // Live activity is evidence the session is executing — recover rows stuck in
+  // a stale state (interrupted from a steer gap, or done/failed/idle when a
+  // re-run's execution.started was missed, e.g. during a plugin reload).
+  private recover(sid: string) {
+    const node = this.model.nodes[sid]
+    if (node && STALE_STATUSES.has(node.status)) {
+      node.status = "running"
+      delete node.endedAt
+      this.onActivity?.(sid, "status", { status: "running" })
+    }
+  }
 
   private ensure(id: string, at: number): FlowNode {
     let n = this.model.nodes[id]

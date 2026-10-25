@@ -30,11 +30,25 @@ function loadService(): ServiceInfo {
   }
 }
 
+/** Current service endpoint + auth header, read fresh from the registration file. */
+export function serviceEndpoint(): { url?: string; authorization?: string } {
+  const s = loadService()
+  return {
+    url: s.url,
+    authorization:
+      s.password === undefined
+        ? undefined
+        : "Basic " + Buffer.from(`opencode:${s.password}`).toString("base64"),
+  }
+}
+
 export interface SidecarOptions {
   port: number
   /** Plugin location directory — used to locate dashboard/index.html. */
   directory: string
   meta?: () => { rev: number; nodes: number }
+  /** Full model provider — served on /snapshot as a dashboard fallback. */
+  snapshot?: () => unknown
 }
 
 export interface Sidecar {
@@ -104,7 +118,7 @@ export function startSidecar(opts: SidecarOptions): Sidecar {
 
     if (p === "/snapshot") {
       res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify(opts.meta ? opts.meta() : { rev: 0, nodes: 0 }))
+      res.end(JSON.stringify(opts.snapshot ? opts.snapshot() : (opts.meta?.() ?? { rev: 0, nodes: 0 })))
       return
     }
 
