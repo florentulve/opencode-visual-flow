@@ -412,41 +412,58 @@ function renderList() {
     } else hiddenOld++
   }
 
-  // independent columns: contiguous runs of the ordered list — column 1 gets
-  // the first run, column 2 the next, … a session never spans two columns
+  // independent columns. Dispatch phase: pinned + running/waiting trees are
+  // dealt round-robin onto the column tops (global order preserved), so every
+  // column leads with a live session by default. Fill phase: the rest is cut
+  // into contiguous balanced runs, one per column — a session never spans two.
   let colCount = gridCols
   if (window.innerWidth < 1150) colCount = 1
   colCount = Math.max(1, Math.min(colCount, chunks.length))
-  const total = chunks.reduce((s, c) => s + c.weight, 0)
-  const target = total / colCount
-  const bounds = [0]
-  let acc = 0
-  for (let i = 0; i < chunks.length && bounds.length < colCount; i++) {
-    acc += chunks[i].weight
-    // cut here only if enough chunks remain for the still-unopened runs
-    if (acc >= target && chunks.length - (i + 1) >= colCount - bounds.length) {
-      bounds.push(i + 1)
-      acc = 0
+
+  const isSpecial = ch => {
+    const root = ch.units[0]?.n
+    return !!root && (pinSet.has(root.id) || treeBusy(root))
+  }
+  let si = 0
+  while (si < chunks.length && isSpecial(chunks[si])) si++
+  const specials = chunks.slice(0, si)
+  const rest = chunks.slice(si)
+
+  const cols = Array.from({ length: colCount }, () => ({ units: [] }))
+  specials.forEach((ch, j) => cols[j % colCount].units.push(...ch.units))
+
+  if (rest.length) {
+    const runs = Math.min(colCount, rest.length)
+    const total = rest.reduce((s, c) => s + c.weight, 0)
+    const target = total / runs
+    const bounds = [0]
+    let acc = 0
+    for (let i = 0; i < rest.length && bounds.length < runs; i++) {
+      acc += rest[i].weight
+      if (acc >= target && rest.length - (i + 1) >= runs - bounds.length) {
+        bounds.push(i + 1)
+        acc = 0
+      }
+    }
+    bounds.push(rest.length)
+    for (let r = 0; r < bounds.length - 1; r++) {
+      const runChunks = rest.slice(bounds[r], bounds[r + 1])
+      if (runChunks.length) cols[r].units.push(...runChunks.flatMap(c => c.units))
     }
   }
-  bounds.push(chunks.length)
-  const cols = []
-  for (let r = 0; r < bounds.length - 1; r++) {
-    const units = chunks.slice(bounds[r], bounds[r + 1]).flatMap(c => c.units)
-    if (units.length) cols.push(units)
-  }
+  const visible = cols.filter(c => c.units.length)
 
   const scrollState = captureScroll()
   pb.innerHTML = projectFilter
     ? `<div class="pbar">project <b>${esc(basename(projectFilter))}</b>` +
       `<button class="mini" data-clearproj="1">✕ all projects</button></div>`
     : ""
-  if (cols.length <= 1) {
+  if (visible.length <= 1) {
     el.className = ""
-    el.innerHTML = (cols[0]?.units ?? []).map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")
+    el.innerHTML = (visible[0]?.units ?? []).map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")
   } else {
     el.className = "grid"
-    el.innerHTML = cols.map(c => `<div class="col">${c.map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")}</div>`).join("")
+    el.innerHTML = visible.map(c => `<div class="col">${c.units.map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")}</div>`).join("")
   }
   mb.innerHTML = hiddenOld > 0 ? `<div class="more" data-more="1">show ${hiddenOld} older sessions</div>` : ""
   restoreScroll(scrollState)
