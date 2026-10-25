@@ -58,8 +58,6 @@
   .chip.idle, .chip.queued { color:#5b6472; }
   .proj { flex:none; font-size:10.5px; font-weight:600; padding:1px 9px; border-radius:9px; border:1px solid;
   .tag { flex:none; font-size:9.5px; color:#8b93a3; border:1px solid #2d3340; border-radius:8px; padding:0 6px; }
-  .tag.live { color:#60a5fa; border-color:rgba(96,165,250,.5); font-weight:600; letter-spacing:.08em; }
-  .row.runner { border-color:#60a5fa; box-shadow:0 0 11px rgba(96,165,250,.14); }
           letter-spacing:.02em; cursor:pointer; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .proj.on { outline:1px solid currentColor; }
   .pbar { display:flex; align-items:center; gap:9px; margin-bottom:9px; color:#8b93a3; font-size:11px; }
@@ -401,24 +399,53 @@ function renderList() {
   const chunks = []
   let compactUsed = 0, hiddenOld = 0
 
-  // Whole-tree chunks: a tree (root + all subagents) is the dispatch unit and
-  // never splits across columns. Trees that are pinned or contain live
-  // sessions are dispatched round-robin onto column tops; leftover live
-  // sessions surface as runner cards on columns without live content.
+  // Split a busy tree into dispatch cards: one per running/waiting session
+  // (session + its non-running descendants), cutting nested running sessions
+  // out as their own cards. Leftover units form the tree's residual chunk.
+  const collectCard = (n, depth) => {
+    const units = [{ n, depth, compact: false }]
+    const cards = []
+    let attached = 0
+    for (const c of (kids.get(n.id) ?? []).slice().sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))) {
+      if (isBusyN(c)) {
+        const r = collectCard(c, 0)
+        cards.push(r.units, ...r.cards)
+      } else {
+        const r = collectCard(c, depth + 1)
+        units.push(...r.units)
+        cards.push(...r.cards)
+        attached++
+      }
+    }
+    units[0] = { ...units[0], kidsShown: attached }
+    return { units, cards }
+  }
+  const pushChunk = (units, extra) => {
+    if (!units.length) return
+    const openFeed = units.some(u => expanded.has(u.n.id))
+    const detached = !!extra?.detached
+    chunks.push({
+      units: units.map(u => ({ ...u, detached })),
+      weight: units.length + (openFeed ? 10 : 0),
+      ...extra,
+    })
+  }
+
   for (const r of ordered) {
     if (treeFull(r)) {
-      const units = []
-      const walk = (n, depth) => {
-        units.push({ n, depth, compact: false })
-        for (const c of (kids.get(n.id) ?? []).slice().sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))) walk(c, depth + 1)
+      if (isBusyN(r)) {
+        const res = collectCard(r, 0)
+        pushChunk(res.units, { special: true })                    // root card (+ non-running descendants)
+        for (const card of res.cards) pushChunk(card, { special: true, detached: true })
+      } else {
+        const res = collectCard(r, 0)
+        if (res.cards.length) {
+          pushChunk(res.units)                                     // residual: root + non-running branches
+          for (const card of res.cards) pushChunk(card, { special: true, detached: true })
+        } else {
+          pushChunk(res.units)
+        }
       }
-      walk(r, 0)
-      const openFeed = units.some(u => expanded.has(u.n.id))
-      chunks.push({
-        units,
-        weight: units.length + (openFeed ? 10 : 0),
-        special: pinSet.has(r.id) || isBusyN(r),
-      })
     } else if (showAllOld || compactUsed < COMPACT_CAP) {
       chunks.push({ units: [{ n: r, depth: 0, compact: true }], weight: 1 })
       compactUsed++
@@ -438,29 +465,8 @@ function renderList() {
   const specials = chunks.filter(c => c.special)
   const rest = chunks.filter(c => !c.special)
 
-  const cols = Array.from({ length: colCount }, () => ({ units: [], live: false }))
-  specials.forEach((ch, j) => {
-    const col = cols[j % colCount]
-    col.units.push(...ch.units)
-    if (ch.units.some(u => isBusyN(u.n))) col.live = true
-  })
-
-  // live runners: a column whose dispatched block has no running/waiting
-  // session gets a pointer card for an uncovered live session (the session
-  // itself stays rendered inside its tree in the column that tree leads)
-  const leads = new Set()
-  for (const col of cols) {
-    for (const u of col.units) {
-      if (isBusyN(u.n)) { leads.add(u.n.id); break }
-    }
-  }
-  const candidates = specials
-    .flatMap(ch => ch.units.filter(u => isBusyN(u.n)).map(u => u.n))
-    .filter(n => !leads.has(n.id))
-  const gaps = cols.filter(c => !c.live)
-  for (let i = 0; i < gaps.length && i < candidates.length; i++) {
-    gaps[i].units.unshift({ n: candidates[i], depth: 0, compact: false, runner: true })
-  }
+  const cols = Array.from({ length: colCount }, () => ({ units: [] }))
+  specials.forEach((ch, j) => cols[j % colCount].units.push(...ch.units))
 
   if (rest.length) {
     const runs = Math.min(colCount, rest.length)
@@ -500,11 +506,11 @@ function renderList() {
 }
 
 function rowHTML(u, kids) {
-  const { n, depth, compact, runner } = u
+  const { n, depth, compact, detached } = u
   const open = expanded.has(n.id)
   const color = STATUS_COLOR[n.status] ?? "#5b6472"
   const busy = isBusy(n)
-  const childRows = (kids.get(n.id) ?? []).length
+  const childRows = typeof u.kidsShown === "number" ? u.kidsShown : (kids.get(n.id) ?? []).length
   const dur = durOf(n)
   const durTxt = dur != null ? (dur > 60_000 ? Math.round(dur / 60_000) + "m" : Math.round(dur / 1000) + "s") : ""
   const isPinned = pinned.includes(n.id)
@@ -514,7 +520,7 @@ function rowHTML(u, kids) {
     : ""
   const pname = n.dir ? basename(n.dir) : "unknown"
   const pcol = projectColor(pname)
-  const liveChip = u.runner ? `<span class="tag live" title="live session dispatched to another column — click to hook in here">LIVE</span>` : ""
+  const subChip = detached && depth === 0 ? `<span class="tag" title="running subagent dispatched to this column">↳ sub</span>` : ""
   const proj = depth === 0
     ? `<span class="proj ${projectFilter === (n.dir ?? "") ? "on" : ""}" data-proj="${esc(n.dir ?? "")}" ` +
       `style="color:${pcol};border-color:${pcol}55" title="${esc(n.dir ?? "unknown project")} — click to filter">${esc(short(pname, 24))}</span>`
@@ -525,7 +531,7 @@ function rowHTML(u, kids) {
     proj +
     `<b>${esc(agentLabel(n))}</b>` +
     `<span class="title" title="${esc(titleOf(n))}">${esc(short(titleOf(n), 56))}</span>` +
-    liveChip +
+    subChip +
     `<span class="chip ${esc(n.status)}">${esc(n.status)}${durTxt && busy ? " " + durTxt : ""}</span>` +
     `<span class="meta">${kfmt(n.tokens?.input ?? 0)}→${kfmt(n.tokens?.output ?? 0)} tok · $${(n.cost ?? 0).toFixed(3)}${compact ? "" : durTxt && !busy ? " · " + durTxt : ""}${childRows ? " · " + childRows + "▸" : ""}</span>` +
     pinBtn +
@@ -543,7 +549,7 @@ function rowHTML(u, kids) {
   }
 
   const unit = `<div class="unit">` +
-    `<div class="row ${busy ? "busy" : ""} ${compact ? "compact" : ""} ${open ? "open" : ""} ${runner ? "runner" : ""} ${isPinned && depth === 0 ? "pinned" : ""} ${depth ? "indent" : ""}" data-toggle="${esc(n.id)}">` +
+    `<div class="row ${busy ? "busy" : ""} ${compact ? "compact" : ""} ${open ? "open" : ""} ${isPinned && depth === 0 ? "pinned" : ""} ${depth ? "indent" : ""}" data-toggle="${esc(n.id)}">` +
     inner + `</div>` +
     (open ? feedHTML(n, kids) : "") +
     `</div>`
