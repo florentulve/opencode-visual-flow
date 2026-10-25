@@ -11,7 +11,7 @@ One OpenCode plugin, zero build step. The plugin runs inside the OpenCode server
 
 ## What it shows
 
-- **Sessions grid** — one configurable grid (1/2/3 columns, persisted). Active sessions are **dispatched round-robin onto the column tops** (so every column leads with a live session when there are enough), then the remaining list fills each column as a contiguous run: running/waiting first (never truncated), then recently active, then older sessions as compact dimmed cards. Subagents render indented under their parent with the spawn (`└`) marker; a session never spans two columns.
+- **Sessions grid** — one configurable grid (1/2/3 columns, persisted). Busy trees are **dispatched whole, round-robin onto the column tops**; any column that would still lack live content gets a **`LIVE` runner card** — a pointer to an uncovered running session (click it to hook into that feed) — while the session stays rendered inside its tree. The remaining list fills each column as a contiguous run: running/waiting first (never truncated), then recently active, then older sessions as compact dimmed cards. Subagents render indented under their parent with the spawn (`└`) marker; a session never spans two columns.
 - **Pinning** — every root card has a pin toggle (`◇`/`◆`): pinned sessions float to the top of the grid in pin order with an accent border, survive reloads, and render full-depth even when stale.
 - **Per-card glance** — status dot + chip, colored project badge (click to filter), agent, title, tokens and cost, duration, current action (the tool running right now), `flow_task` chips, reviewer/critic `⌘ VERDICT` and `⚑` lines, errors.
 - **Hook in** — click a session to expand a live feed in place:
