@@ -412,16 +412,28 @@ function renderList() {
     } else hiddenOld++
   }
 
-  // explicit columns, greedily balanced by weight (order-preserving)
+  // independent columns: contiguous runs of the ordered list — column 1 gets
+  // the first run, column 2 the next, … a session never spans two columns
   let colCount = gridCols
   if (window.innerWidth < 1150) colCount = 1
   colCount = Math.max(1, Math.min(colCount, chunks.length))
-  const cols = Array.from({ length: colCount }, () => ({ w: 0, units: [] }))
-  for (const ch of chunks) {
-    let min = 0
-    for (let i = 1; i < cols.length; i++) if (cols[i].w < cols[min].w) min = i
-    cols[min].w += ch.weight
-    cols[min].units.push(...ch.units)
+  const total = chunks.reduce((s, c) => s + c.weight, 0)
+  const target = total / colCount
+  const bounds = [0]
+  let acc = 0
+  for (let i = 0; i < chunks.length && bounds.length < colCount; i++) {
+    acc += chunks[i].weight
+    // cut here only if enough chunks remain for the still-unopened runs
+    if (acc >= target && chunks.length - (i + 1) >= colCount - bounds.length) {
+      bounds.push(i + 1)
+      acc = 0
+    }
+  }
+  bounds.push(chunks.length)
+  const cols = []
+  for (let r = 0; r < bounds.length - 1; r++) {
+    const units = chunks.slice(bounds[r], bounds[r + 1]).flatMap(c => c.units)
+    if (units.length) cols.push(units)
   }
 
   const scrollState = captureScroll()
@@ -429,12 +441,12 @@ function renderList() {
     ? `<div class="pbar">project <b>${esc(basename(projectFilter))}</b>` +
       `<button class="mini" data-clearproj="1">✕ all projects</button></div>`
     : ""
-  if (colCount === 1) {
+  if (cols.length <= 1) {
     el.className = ""
-    el.innerHTML = cols[0].units.map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")
+    el.innerHTML = (cols[0]?.units ?? []).map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")
   } else {
     el.className = "grid"
-    el.innerHTML = cols.map(c => `<div class="col">${c.units.map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")}</div>`).join("")
+    el.innerHTML = cols.map(c => `<div class="col">${c.map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")}</div>`).join("")
   }
   mb.innerHTML = hiddenOld > 0 ? `<div class="more" data-more="1">show ${hiddenOld} older sessions</div>` : ""
   restoreScroll(scrollState)
