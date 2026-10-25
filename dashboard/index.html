@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Flow</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0d0f14; color:#c7cdd8; font:12.5px/1.5 ui-monospace,"SF Mono",Menlo,monospace; }
+  .wrap { max-width:1100px; margin:0 auto; padding:14px; }
+  header { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
+  h1 { font-size:13px; color:#e8ecf3; margin:0; letter-spacing:.16em; }
+  .conn { display:flex; align-items:center; gap:6px; font-size:11px; color:#5b6472; }
+  .conn .dot { width:8px; height:8px; border-radius:50%; background:#5b6472; }
+  .conn.live .dot { background:#4ade80; box-shadow:0 0 7px rgba(74,222,128,.7); }
+  .totals { margin-left:auto; color:#8b93a3; font-size:11.5px; }
+  .totals b { color:#e8ecf3; font-variant-numeric:tabular-nums; }
+
+  .panel { background:#12141a; border:1px solid #2d3340; border-radius:10px; padding:12px; }
+  .panel h2 { font-size:10.5px; letter-spacing:.13em; color:#5b6472; margin:0; text-transform:uppercase; font-weight:600; }
+  .ph { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .mini { font:inherit; font-size:10px; color:#5b6472; background:#1c1f26; border:1px solid #2d3340;
+          border-radius:8px; padding:2px 10px; cursor:pointer; transition:color .2s, border-color .2s, opacity .2s; }
+  .mini:hover { color:#c7cdd8; border-color:#3a4150; }
+  .mini.off { opacity:.35; pointer-events:none; }
+
+  .unit { margin-bottom:8px; }
+  .row { background:#1c1f26; border:1px solid #2d3340; border-radius:8px; padding:8px 11px; cursor:pointer;
+         transition:border-color .25s, box-shadow .25s; }
+  .row:hover { border-color:#3a4150; }
+  .row.busy { border-color:#60a5fa; box-shadow:0 0 11px rgba(96,165,250,.14); }
+  .row.compact { padding:5px 11px; opacity:.55; }
+  .row.compact:hover { opacity:.85; }
+  .row.open { border-color:#3a4150; }
+  .row .top { display:flex; align-items:center; gap:8px; min-width:0; }
+  .row .dot { width:8px; height:8px; border-radius:50%; flex:none; }
+  .row b { color:#e8ecf3; font-size:12px; flex:none; }
+  .row .title { color:#8b93a3; font-size:11.5px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chip { font-size:9.5px; padding:1px 8px; border-radius:10px; border:1px solid #2d3340; color:#8b93a3; flex:none; }
+  .chip.running { color:#60a5fa; border-color:rgba(96,165,250,.4); }
+  .chip.waiting, .chip.interrupted { color:#fbbf24; border-color:rgba(251,191,36,.4); }
+  .chip.done { color:#4ade80; border-color:rgba(74,222,128,.35); }
+  .chip.failed { color:#f87171; border-color:rgba(248,113,113,.4); }
+  .chip.idle, .chip.queued { color:#5b6472; }
+  .tag { flex:none; color:#5b6472; font-size:9.5px; border:1px solid #2d3340; border-radius:8px; padding:0 6px; }
+  .meta { margin-left:auto; color:#8b93a3; font-size:10.5px; font-variant-numeric:tabular-nums; flex:none; }
+  .sub { color:#8b93a3; font-size:11px; margin-top:3px; min-height:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .indent { margin-left:22px; position:relative; }
+  .indent::before { content:"└"; position:absolute; left:-16px; top:6px; color:#3a4150; }
+  .tasks { margin-top:5px; display:flex; gap:5px; flex-wrap:wrap; }
+  .task { font-size:10px; padding:1px 8px; border-radius:9px; background:#242832; color:#8b93a3; max-width:100%;
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .task.active { color:#60a5fa; background:rgba(96,165,250,.09); }
+  .task.done { color:#4ade80; background:rgba(74,222,128,.07); }
+  .task.failed { color:#f87171; background:rgba(248,113,113,.09); }
+  .verdictline { color:#4ade80; font-size:10.5px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .flagline { color:#fbbf24; font-size:10.5px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  .feed { margin:8px 0 2px 22px; border-left:2px solid #2d3340; padding:2px 0 2px 12px; }
+  .feed .sum { color:#5b6472; font-size:10.5px; margin-bottom:6px; }
+  .feed .cap { color:#5b6472; font-size:10px; margin-bottom:3px; }
+  .feed h3 { font-size:9.5px; letter-spacing:.12em; color:#3f4655; margin:8px 0 4px; text-transform:uppercase; font-weight:600; }
+  .tick { display:flex; align-items:baseline; gap:8px; font-size:11px; padding:1px 0; min-width:0; }
+  .tick .tt { color:#5b6472; font-size:10px; flex:none; font-variant-numeric:tabular-nums; }
+  .tick .tn { flex:none; font-weight:600; }
+  .tick .td { color:#8b93a3; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .tick .tm { color:#5b6472; font-size:10px; flex:none; font-variant-numeric:tabular-nums; }
+  .tick .ts { flex:none; width:12px; text-align:center; }
+  .out { margin-top:4px; background:#0d0f14; border:1px solid #2d3340; border-radius:6px; padding:7px 9px;
+         font-size:11px; line-height:1.45; white-space:pre-wrap; word-break:break-word;
+         max-height:240px; overflow-y:auto; color:#a8b0bf; }
+  .more { color:#5b6472; text-align:center; font-size:11px; padding:6px 0 2px; cursor:pointer; }
+  .more:hover { color:#8b93a3; }
+  .empty { color:#5b6472; text-align:center; padding:24px 0; }
+  .hint { color:#5b6472; font-size:10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="conn" id="conn"><span class="dot"></span><span id="connText">connecting…</span></div>
+    <h1>AGENT&nbsp;FLOW</h1>
+    <div class="totals" id="totals"></div>
+  </header>
+  <div class="panel">
+    <div class="ph">
+      <h2>Sessions · click to hook in</h2>
+      <button id="collapseAll" class="mini" title="close all open feeds">collapse all</button>
+    </div>
+    <div id="list"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ------------------------------------------------------------- constants
+const STATUS_COLOR = {
+  running: "#60a5fa", waiting: "#fbbf24", done: "#4ade80", failed: "#f87171",
+  interrupted: "#fbbf24", idle: "#5b6472", queued: "#3a4150",
+}
+const TICK_COLOR = {
+  bash: "#fbbf24", edit: "#4ade80", write: "#4ade80", read: "#60a5fa", grep: "#60a5fa",
+  glob: "#60a5fa", list: "#60a5fa", task: "#e879f9", subagent: "#e879f9",
+  webfetch: "#38bdf8", websearch: "#38bdf8", flow: "#4ade80",
+  other: "#5b6472",
+}
+const RECENT_MS = 10 * 60_000
+const COMPACT_CAP = 15
+const FEED_TICKS = 60
+
+// ------------------------------------------------------------- helpers
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))
+const kfmt = n => n == null ? "—" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(Math.round(n))
+const short = (s, n) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s }
+const hhmm = t => { const d = new Date(t); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") }
+const hhmmss = t => hhmm(t) + ":" + String(new Date(t).getSeconds()).padStart(2, "0")
+const agentLabel = n => !n.agent || n.agent === "?" ? "unknown" : n.agent
+const titleOf = n => (!n.title || n.title === n.id) ? "session " + n.id.slice(-6) : n.title
+const basename = d => String(d ?? "").split("/").filter(Boolean).pop() || String(d ?? "")
+const isBusy = n => n.status === "running" || n.status === "waiting"
+const durOf = n => n.startedAt ? ((n.endedAt ?? Date.now()) - n.startedAt) : null
+
+// ------------------------------------------------------------- state
+let model = null
+let useSnapshotFallback = false
+let es = null
+let renderTimer = null
+let showAllOld = false
+let expanded = new Set()
+try { expanded = new Set(JSON.parse(localStorage.getItem("flow.expanded") || "[]")) } catch {}
+const saveExpanded = () => localStorage.setItem("flow.expanded", JSON.stringify([...expanded]))
+
+// ------------------------------------------------------------- data access
+const nodes = () => Object.values(model?.nodes ?? {})
+const ticksOf = id => (model?.ticks ?? []).filter(t => t.sessionID === id)
+
+function treesOf(ns) {
+  const byId = new Map(ns.map(n => [n.id, n]))
+  const kids = new Map()
+  const isChild = new Set()
+  for (const n of ns) {
+    if (n.parentID && byId.has(n.parentID)) {
+      if (!kids.has(n.parentID)) kids.set(n.parentID, [])
+      kids.get(n.parentID).push(n)
+      isChild.add(n.id)
+    }
+  }
+  return { byId, kids, roots: ns.filter(n => !isChild.has(n.id)) }
+}
+
+function treeMembers(root, kids) {
+  const out = []
+  const walk = n => { out.push(n); for (const c of (kids.get(n.id) ?? [])) walk(c) }
+  walk(root)
+  return out
+}
+
+// ------------------------------------------------------------- live loop
+async function fetchSnapshot() {
+  let j
+  if (!useSnapshotFallback) {
+    const r = await fetch("/api/rpc/flow/snapshot", {
+      method: "POST", headers: { "content-type": "application/json" }, body: '{"input":{}}',
+    })
+    if (!r.ok) throw new Error("rpc " + r.status)
+    j = await r.json()
+    model = j.output ?? j
+  } else {
+    const r = await fetch("/snapshot")
+    if (!r.ok) throw new Error("snapshot " + r.status)
+    model = await r.json()
+  }
+  // drop expansions for deleted sessions
+  const ids = new Set(nodes().map(n => n.id))
+  for (const id of [...expanded]) if (!ids.has(id)) expanded.delete(id)
+  render()
+}
+
+const schedule = () => { clearTimeout(renderTimer); renderTimer = setTimeout(() => fetchSnapshot().catch(fail), 300) }
+let recTimer
+const reconcile = () => { clearTimeout(recTimer); recTimer = setTimeout(() => fetchSnapshot().catch(fail), 1000) }
+const fail = () => setConn("offline")
+
+function setConn(state) {
+  const el = document.getElementById("conn")
+  el.className = "conn" + (state === "live" ? " live" : "")
+  document.getElementById("connText").textContent = state
+}
+
+function connect() {
+  try {
+    es = new EventSource("/api/event")
+    es.onopen = () => setConn("live")
+    es.onerror = () => setConn("reconnecting")
+    es.onmessage = e => {
+      try {
+        const ev = JSON.parse(e.data)
+        if (ev.type === "rpc.flow.activity") { applyActivity(ev.data); return }
+        if (typeof ev.type === "string" && ev.type.startsWith("rpc.flow.")) reconcile()
+      } catch {}
+    }
+  } catch { setConn("offline") }
+}
+
+setInterval(() => fetchSnapshot().catch(fail), 5000)
+connect()
+fetchSnapshot().then(() => setConn("live")).catch(() => {
+  useSnapshotFallback = true
+  fetchSnapshot().then(() => setConn("live")).catch(() => setConn("offline"))
+})
+
+// click: toggle the hook-in feed
+document.getElementById("list").addEventListener("click", e => {
+  if (e.target.closest("[data-more]")) { showAllOld = true; render(); return }
+  const row = e.target.closest("[data-toggle]")
+  if (!row) return
+  const id = row.dataset.toggle
+  if (expanded.has(id)) expanded.delete(id)
+  else expanded.add(id)
+  saveExpanded()
+  render()
+})
+document.getElementById("collapseAll").addEventListener("click", () => {
+  expanded.clear()
+  showAllOld = false
+  saveExpanded()
+  render()
+})
+
+let rsTimer
+window.addEventListener("resize", () => { clearTimeout(rsTimer); rsTimer = setTimeout(render, 120) })
+
+// ------------------------------------------------------------- rendering
+function render() {
+  if (!model) return
+  renderTotals()
+  renderList()
+  const btn = document.getElementById("collapseAll")
+  btn.classList.toggle("off", expanded.size === 0 && !showAllOld)
+}
+
+function renderTotals() {
+  const ns = nodes()
+  const running = ns.filter(isBusy).length
+  const tok = ns.reduce((t, n) => t + (n.tokens?.input ?? 0) + (n.tokens?.output ?? 0) + (n.tokens?.reasoning ?? 0), 0)
+  const cost = ns.reduce((t, n) => t + (n.cost ?? 0), 0)
+  document.getElementById("totals").innerHTML =
+    `sessions <b>${ns.length}</b> · running <b>${running}</b> · tokens <b>${kfmt(tok)}</b> · cost <b>$${cost.toFixed(2)}</b> · rev <b>${model.rev ?? 0}</b>`
+}
+
+// preserve scroll positions of open feeds/output across re-render
+function captureScroll() {
+  const state = new Map()
+  document.querySelectorAll(".feed[data-sid]").forEach(f => {
+    const out = f.querySelector(".out")
+    const el = out ?? f
+    state.set(f.dataset.sid, {
+      top: el.scrollTop,
+      follow: el.scrollTop + el.clientHeight >= el.scrollHeight - 48,
+    })
+  })
+  return state
+}
+function restoreScroll(state) {
+  document.querySelectorAll(".feed[data-sid]").forEach(f => {
+    const s = state.get(f.dataset.sid)
+    if (!s) return
+    const out = f.querySelector(".out")
+    const el = out ?? f
+    el.scrollTop = s.follow ? el.scrollHeight : s.top
+  })
+}
+
+// ------------------------------------------------------------- session list
+function renderList() {
+  const el = document.getElementById("list")
+  const ns = nodes()
+  if (!ns.length) { el.innerHTML = '<div class="empty">no sessions yet — run an agent</div>'; return }
+
+  const { byId, kids, roots } = treesOf(ns)
+  const now = Date.now()
+  const members = r => treeMembers(r, kids)
+  const treeBusy = r => members(r).some(isBusy)
+  const treeRec = r => Math.max(r.updatedAt ?? 0, ...members(r).map(m => m.updatedAt ?? 0))
+  const treeFull = r => treeBusy(r) || treeRec(r) > now - RECENT_MS || members(r).some(m => expanded.has(m.id))
+
+  const ordered = roots.slice().sort((a, b) => (treeBusy(b) - treeBusy(a)) || (treeRec(b) - treeRec(a)))
+
+  // project tags: only when sessions span multiple locations
+  const dirs = new Set()
+  for (const n of ns) if (n.dir) dirs.add(basename(n.dir))
+  const multiProject = dirs.size > 1
+
+  const rows = []       // {n, depth, compact}
+  let compactUsed = 0, hiddenOld = 0
+  for (const r of ordered) {
+    if (treeFull(r)) {
+      const walk = (n, depth) => {
+        rows.push({ n, depth, compact: false })
+        for (const c of (kids.get(n.id) ?? []).slice().sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))) walk(c, depth + 1)
+      }
+      walk(r, 0)
+    } else if (showAllOld || compactUsed < COMPACT_CAP) {
+      rows.push({ n: r, depth: 0, compact: true })
+      compactUsed++
+    } else hiddenOld++
+  }
+
+  const scrollState = captureScroll()
+  let html = rows.map(({ n, depth, compact }) => rowHTML(n, depth, compact, kids, multiProject)).join("")
+  if (hiddenOld > 0) html += `<div class="more" data-more="1">show ${hiddenOld} older sessions</div>`
+  el.innerHTML = html
+  restoreScroll(scrollState)
+}
+
+function rowHTML(n, depth, compact, kids, multiProject) {
+  const open = expanded.has(n.id)
+  const color = STATUS_COLOR[n.status] ?? "#5b6472"
+  const busy = isBusy(n)
+  const childRows = (kids.get(n.id) ?? []).length
+  const dur = durOf(n)
+  const durTxt = dur != null ? (dur > 60_000 ? Math.round(dur / 60_000) + "m" : Math.round(dur / 1000) + "s") : ""
+  const tag = multiProject && n.dir ? `<span class="tag" title="${esc(n.dir)}">${esc(basename(n.dir))}</span>` : ""
+
+  let inner = `<div class="top">` +
+    `<span class="dot" style="background:${color}${busy ? ";box-shadow:0 0 6px " + color : ""}"></span>` +
+    `<b>${esc(agentLabel(n))}</b>` +
+    `<span class="title" title="${esc(titleOf(n))}">${esc(short(titleOf(n), 64))}</span>` +
+    tag +
+    `<span class="chip ${esc(n.status)}">${esc(n.status)}${durTxt && busy ? " " + durTxt : ""}</span>` +
+    `<span class="meta">${kfmt(n.tokens?.input ?? 0)}→${kfmt(n.tokens?.output ?? 0)} tok · $${(n.cost ?? 0).toFixed(3)}${compact ? "" : durTxt && !busy ? " · " + durTxt : ""}${childRows ? " · " + childRows + "▸" : ""}</span>` +
+    `</div>`
+
+  if (!compact) {
+    const action = n.current ?? (busy ? "working…" : "")
+    if (action) inner += `<div class="sub">${busy ? "└ " : ""}${esc(short(action, 110))}</div>`
+    const tasks = (n.tasks ?? []).slice(-4).map(t =>
+      `<span class="task ${t.state}" title="${esc(t.detail ?? "")}">${esc(short(t.task, 24))}</span>`).join("")
+    if (tasks) inner += `<div class="tasks">${tasks}</div>`
+    if (n.verdict) inner += `<div class="verdictline" title="${esc(n.verdict)}">⌘ ${esc(short(n.verdict, 110))}</div>`
+    for (const f of (n.flags ?? []).slice(-2)) inner += `<div class="flagline" title="${esc(f)}">⚑ ${esc(short(f, 110))}</div>`
+    if (n.error) inner += `<div class="flagline" style="color:#f87171">✗ ${esc(short(n.error, 110))}</div>`
+  }
+
+  const unit = `<div class="unit">` +
+    `<div class="row ${busy ? "busy" : ""} ${compact ? "compact" : ""} ${open ? "open" : ""} ${depth ? "indent" : ""}" data-toggle="${esc(n.id)}">` +
+    inner + `</div>` +
+    (open ? feedHTML(n, kids) : "") +
+    `</div>`
+  return unit
+}
+
+// ------------------------------------------------------------- hook-in feed
+function feedHTML(n, kids) {
+  const ticks = ticksOf(n.id)
+  const shown = ticks.slice(-FEED_TICKS)
+  const older = ticks.length - shown.length
+  const children = kids.get(n.id) ?? []
+
+  const bits = [esc(n.status)]
+  if (n.steps) bits.push(n.steps + " steps")
+  if (n.toolsRun || n.toolsFailed) bits.push(n.toolsRun + " tools" + (n.toolsFailed ? ` (${n.toolsFailed} failed)` : ""))
+  if (n.startedAt) bits.push("started " + hhmm(n.startedAt))
+  bits.push("$" + (n.cost ?? 0).toFixed(3))
+  bits.push(kfmt((n.tokens?.input ?? 0) + (n.tokens?.output ?? 0) + (n.tokens?.reasoning ?? 0)) + " tok")
+  if (n.permissions) bits.push(n.permissions + " permission asks")
+  if (children.length) bits.push(children.length + " subagents ↓")
+
+  let s = `<div class="feed" data-sid="${esc(n.id)}"><div class="sum">${bits.join(" · ")}</div>`
+
+  s += `<h3>activity</h3>`
+  if (older > 0) s += `<div class="cap">… ${older} older tool calls</div>`
+  s += `<div class="ticks">${shown.map(tickHTML).join("")}</div>`
+  if (!ticks.length) {
+    s += `<div class="hint">no tool activity captured${n.steps ? " — activity predates the dashboard" : ""}</div>`
+  }
+
+  if (n.lastText) {
+    s += `<h3>output · live</h3><div class="out">${esc(n.lastText)}</div>`
+  }
+  s += `</div>`
+  return s
+}
+
+// ------------------------------------------------------------- live streaming
+const cssEsc = s => String(s).replace(/"/g, '\\"')
+
+function tickHTML(t) {
+  const cls = TICK_COLOR[t.name?.toLowerCase()] ?? TICK_COLOR.other
+  const st = t.status === "error" ? ["✗", "#f87171"] : t.status === "running" ? ["●", "#60a5fa"] : ["✓", "#4ade80"]
+  return `<div class="tick" data-tick="${esc(t.id)}">` +
+    `<span class="tt">${hhmmss(t.at)}</span>` +
+    `<span class="tn" style="color:${cls}">${esc(t.name)}</span>` +
+    `<span class="td" title="${esc(t.detail ?? "")}">${esc(short(t.detail ?? "", 120))}</span>` +
+    `<span class="tm">${t.ms != null ? (t.ms / 1000).toFixed(1) + "s" : ""}</span>` +
+    `<span class="ts" style="color:${st[1]}">${st[0]}</span>` +
+    `</div>`
+}
+
+// apply a streamed activity event: patch the model, then update just the
+// hooked feed's DOM (no full re-render)
+function applyActivity(a) {
+  if (!model || !a || typeof a.sessionID !== "string") return
+  const n = model.nodes[a.sessionID]
+  if (!n) return
+  const d = a.data ?? {}
+  if (a.kind === "text") {
+    const chunk = String(d.text ?? "")
+    if (!chunk) return
+    n.lastText = (n.lastText ?? "") + chunk
+    if (n.lastText.length > 4000) n.lastText = n.lastText.slice(-2000)
+    streamText(a.sessionID, chunk)
+    return
+  }
+  if (a.kind === "tool") {
+    const t = upsertTick(a.sessionID, d)
+    if (t) streamTick(a.sessionID, t)
+    return
+  }
+  if (a.kind === "status") {
+    if (typeof d.status === "string") n.status = d.status
+    schedule()
+    return
+  }
+  if (a.kind === "step") {
+    if (d.phase === "started") n.steps = (n.steps ?? 0) + 1
+    schedule()
+  }
+}
+
+function upsertTick(sid, d) {
+  if (!d || typeof d.id !== "string") return undefined
+  let t = (model.ticks ?? []).find(x => x.id === d.id)
+  if (!t) {
+    t = { id: d.id, sessionID: sid, name: String(d.name ?? "tool"), status: "running", at: Number(d.at) || Date.now() }
+    model.ticks.push(t)
+    if (model.ticks.length > 1200) model.ticks.splice(0, model.ticks.length - 1200)
+  }
+  if (d.name) t.name = String(d.name)
+  if (typeof d.detail === "string" && d.detail) t.detail = d.detail
+  if (d.status === "ok" || d.status === "error" || d.status === "running") t.status = d.status
+  if (d.ms != null) t.ms = d.ms
+  return t
+}
+
+function streamTick(sid, t) {
+  const feed = document.querySelector(`.feed[data-sid="${cssEsc(sid)}"]`)
+  if (!feed) return
+  feed.querySelector(".hint")?.remove()
+  const box = feed.querySelector(".ticks")
+  if (!box) return
+  const existing = box.querySelector(`[data-tick="${cssEsc(t.id)}"]`)
+  if (existing) existing.outerHTML = tickHTML(t)
+  else box.insertAdjacentHTML("beforeend", tickHTML(t))
+  if (t.status === "running") {
+    const sub = document.querySelector(`[data-toggle="${cssEsc(sid)}"] .sub`)
+    if (sub) sub.textContent = "└ " + t.name + (t.detail ? ": " + short(t.detail, 100) : "")
+  }
+}
+
+function streamText(sid, chunk) {
+  const feed = document.querySelector(`.feed[data-sid="${cssEsc(sid)}"]`)
+  const out = feed && feed.querySelector(".out")
+  if (!out) return
+  const follow = out.scrollTop + out.clientHeight >= out.scrollHeight - 48
+  out.append(chunk)
+  if (out.textContent.length > 6000) out.textContent = out.textContent.slice(-3000)
+  if (follow) out.scrollTop = out.scrollHeight
+}
+</script>
+</body>
+</html>

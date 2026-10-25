@@ -1,0 +1,39 @@
+{
+  "name": "opencode-visual-flow",
+  "version": "0.2.0",
+  "description": "OpenCode plugin: live HTML dashboard for agent flow, cooperation, and task progression — hook into any session to watch tools and output stream in real time",
+  "license": "MIT",
+  "author": "Florent Ulvé <florent.ulve@protonmail.com>",
+  "type": "module",
+  "exports": {
+    ".": "./server.ts",
+    "./rpc": "./rpc.ts"
+  },
+  "scripts": {
+    "replay": "bun run scripts/replay.ts"
+  },
+  "files": [
+    "server.ts",
+    "rpc.ts",
+    "src",
+    "dashboard",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "dashboard",
+    "agents",
+    "multi-agent",
+    "observability"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/florentulve/opencode-visual-flow.git"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.1.4"
+  }
+}
