@@ -8,8 +8,7 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body { margin:0; background:#0d0f14; color:#c7cdd8; font:12.5px/1.5 ui-monospace,"SF Mono",Menlo,monospace; }
-  .wrap { max-width:1100px; margin:0 auto; padding:14px; transition:max-width .2s; }
-  body.wide .wrap { max-width:1560px; }
+  .wrap { max-width:1100px; margin:0 auto; padding:14px; }
   header { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
   h1 { font-size:13px; color:#e8ecf3; margin:0; letter-spacing:.16em; }
   .conn { display:flex; align-items:center; gap:6px; font-size:11px; color:#5b6472; }
@@ -21,22 +20,10 @@
   .panel { background:#12141a; border:1px solid #2d3340; border-radius:10px; padding:12px; }
   .panel h2 { font-size:10.5px; letter-spacing:.13em; color:#5b6472; margin:0; text-transform:uppercase; font-weight:600; }
   .ph { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
-  .ph-r { display:flex; align-items:center; gap:5px; }
-  .ph-label { color:#5b6472; font-size:10px; letter-spacing:.1em; text-transform:uppercase; margin-right:3px; }
   .mini { font:inherit; font-size:10px; color:#5b6472; background:#1c1f26; border:1px solid #2d3340;
           border-radius:8px; padding:2px 10px; cursor:pointer; transition:color .2s, border-color .2s, opacity .2s; }
   .mini:hover { color:#c7cdd8; border-color:#3a4150; }
-  .mini.on { color:#e8ecf3; border-color:#60a5fa; }
   .mini.off { opacity:.35; pointer-events:none; }
-
-  /* grid: explicit column containers — a column always starts with a new session */
-  #list.grid { display:flex; gap:12px; align-items:flex-start; }
-  #list.grid .col { flex:1 1 0; min-width:0; }
-  #list.grid .ticks { max-height:340px; overflow-y:auto; }
-  .pinbtn { flex:none; cursor:pointer; color:#3f4655; font-size:11px; padding:0 2px; user-select:none; }
-  .pinbtn:hover { color:#c7cdd8; }
-  .pinbtn.on { color:#fbbf24; }
-  .row.pinned { border-color:rgba(251,191,36,.45); box-shadow:inset 2px 0 0 rgba(251,191,36,.55); }
 
   .unit { margin-bottom:8px; }
   .row { background:#1c1f26; border:1px solid #2d3340; border-radius:8px; padding:8px 11px; cursor:pointer;
@@ -57,7 +44,6 @@
   .chip.failed { color:#f87171; border-color:rgba(248,113,113,.4); }
   .chip.idle, .chip.queued { color:#5b6472; }
   .proj { flex:none; font-size:10.5px; font-weight:600; padding:1px 9px; border-radius:9px; border:1px solid;
-  .tag { flex:none; font-size:9.5px; color:#8b93a3; border:1px solid #2d3340; border-radius:8px; padding:0 6px; }
           letter-spacing:.02em; cursor:pointer; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .proj.on { outline:1px solid currentColor; }
   .pbar { display:flex; align-items:center; gap:9px; margin-bottom:9px; color:#8b93a3; font-size:11px; }
@@ -102,20 +88,12 @@
     <h1>AGENT&nbsp;FLOW</h1>
     <div class="totals" id="totals"></div>
   </header>
-  <div class="panel" id="sessionPanel">
+  <div class="panel">
     <div class="ph">
       <h2>Sessions · click to hook in</h2>
-      <div class="ph-r">
-        <span class="ph-label">cols</span>
-        <button class="mini" data-cols="1">1</button>
-        <button class="mini" data-cols="2">2</button>
-        <button class="mini" data-cols="3">3</button>
-        <button id="collapseAll" class="mini" title="close all open feeds">collapse all</button>
-      </div>
+      <button id="collapseAll" class="mini" title="close all open feeds">collapse all</button>
     </div>
-    <div id="pbar"></div>
     <div id="list"></div>
-    <div id="morebar"></div>
   </div>
 </div>
 
@@ -172,19 +150,6 @@ try {
   }
 } catch {}
 const saveExpanded = () => localStorage.setItem("flow.expanded", JSON.stringify([...expanded]))
-
-// pinned sessions float to the top of the grid, in pin order
-let pinned = []
-try { pinned = (JSON.parse(localStorage.getItem("flow.pinned") || "[]") || []).filter(x => typeof x === "string") } catch {}
-const savePinned = () => localStorage.setItem("flow.pinned", JSON.stringify(pinned))
-
-// grid column count (persisted)
-let gridCols = 2
-try {
-  const v = Number(localStorage.getItem("flow.cols"))
-  if (v === 1 || v === 2 || v === 3) gridCols = v
-} catch {}
-const saveCols = () => localStorage.setItem("flow.cols", String(gridCols))
 
 // ------------------------------------------------------------- data access
 const nodes = () => Object.values(model?.nodes ?? {})
@@ -267,9 +232,8 @@ fetchSnapshot().then(() => setConn("live")).catch(() => {
   fetchSnapshot().then(() => setConn("live")).catch(() => setConn("offline"))
 })
 
-// click: hook-in feeds, pins, project filter, older sessions (delegated on the
-// panel so pbar/morebar work too)
-document.getElementById("sessionPanel").addEventListener("click", e => {
+// click: toggle the hook-in feed
+document.getElementById("list").addEventListener("click", e => {
   if (e.target.closest("[data-more]")) { showAllOld = true; render(); return }
   const clear = e.target.closest("[data-clearproj]")
   if (clear) { projectFilter = null; render(); return }
@@ -277,16 +241,6 @@ document.getElementById("sessionPanel").addEventListener("click", e => {
   if (proj) {
     const dir = proj.dataset.proj || null
     projectFilter = projectFilter === dir ? null : dir
-    render()
-    return
-  }
-  const pinEl = e.target.closest("[data-pin]")
-  if (pinEl) {
-    const id = pinEl.dataset.pin
-    const i = pinned.indexOf(id)
-    if (i >= 0) pinned.splice(i, 1)
-    else pinned.push(id)
-    savePinned()
     render()
     return
   }
@@ -298,10 +252,6 @@ document.getElementById("sessionPanel").addEventListener("click", e => {
   saveExpanded()
   render()
 })
-document.querySelectorAll("[data-cols]").forEach(b => b.addEventListener("click", () => {
-  const v = Number(b.dataset.cols)
-  if (v !== gridCols) { gridCols = v; saveCols(); render() }
-}))
 document.getElementById("collapseAll").addEventListener("click", () => {
   expanded.clear()
   showAllOld = false
@@ -315,8 +265,6 @@ window.addEventListener("resize", () => { clearTimeout(rsTimer); rsTimer = setTi
 // ------------------------------------------------------------- rendering
 function render() {
   if (!model) return
-  document.body.classList.toggle("wide", gridCols > 1)
-  document.querySelectorAll("[data-cols]").forEach(b => b.classList.toggle("on", Number(b.dataset.cols) === gridCols))
   renderTotals()
   renderList()
   const btn = document.getElementById("collapseAll")
@@ -333,16 +281,16 @@ function renderTotals() {
     `projects <b>${projects}</b> · sessions <b>${ns.length}</b> · running <b>${running}</b> · tokens <b>${kfmt(tok)}</b> · cost <b>$${cost.toFixed(2)}</b> · rev <b>${model.rev ?? 0}</b>`
 }
 
-// preserve scroll positions of open feeds (output + capped tick box) across re-render
+// preserve scroll positions of open feeds/output across re-render
 function captureScroll() {
   const state = new Map()
   document.querySelectorAll(".feed[data-sid]").forEach(f => {
-    const st = {}
     const out = f.querySelector(".out")
-    if (out) st.out = { top: out.scrollTop, follow: out.scrollTop + out.clientHeight >= out.scrollHeight - 48 }
-    const ticks = f.querySelector(".ticks")
-    if (ticks) st.ticks = { top: ticks.scrollTop, follow: ticks.scrollTop + ticks.clientHeight >= ticks.scrollHeight - 48 }
-    state.set(f.dataset.sid, st)
+    const el = out ?? f
+    state.set(f.dataset.sid, {
+      top: el.scrollTop,
+      follow: el.scrollTop + el.clientHeight >= el.scrollHeight - 48,
+    })
   })
   return state
 }
@@ -351,176 +299,65 @@ function restoreScroll(state) {
     const s = state.get(f.dataset.sid)
     if (!s) return
     const out = f.querySelector(".out")
-    if (out && s.out) out.scrollTop = s.out.follow ? out.scrollHeight : s.out.top
-    const ticks = f.querySelector(".ticks")
-    if (ticks && s.ticks) ticks.scrollTop = s.ticks.follow ? ticks.scrollHeight : s.ticks.top
+    const el = out ?? f
+    el.scrollTop = s.follow ? el.scrollHeight : s.top
   })
 }
 
 // ------------------------------------------------------------- session list
 function renderList() {
   const el = document.getElementById("list")
-  const pb = document.getElementById("pbar")
-  const mb = document.getElementById("morebar")
   const ns = nodes()
-  if (!ns.length) {
-    pb.innerHTML = ""
-    mb.innerHTML = ""
-    el.className = ""
-    el.innerHTML = '<div class="empty">no sessions yet — run an agent</div>'
-    return
-  }
+  if (!ns.length) { el.innerHTML = '<div class="empty">no sessions yet — run an agent</div>'; return }
 
   const { byId, kids, roots } = treesOf(ns)
   const now = Date.now()
   const members = r => treeMembers(r, kids)
   const treeBusy = r => members(r).some(isBusy)
   const treeRec = r => Math.max(r.updatedAt ?? 0, ...members(r).map(m => m.updatedAt ?? 0))
-
-  // prune pins for vanished sessions
-  const pruned = pinned.filter(id => byId.has(id))
-  if (pruned.length !== pinned.length) { pinned = pruned; savePinned() }
-  const pinSet = new Set(pinned)
-  const pinOrder = id => { const i = pinned.indexOf(id); return i < 0 ? Number.MAX_SAFE_INTEGER : i }
-
-  const treeFull = r => pinSet.has(r.id) || treeBusy(r) || treeRec(r) > now - RECENT_MS || members(r).some(m => expanded.has(m.id))
-  const isBusyN = n => n.status === "running" || n.status === "waiting"
+  const treeFull = r => treeBusy(r) || treeRec(r) > now - RECENT_MS || members(r).some(m => expanded.has(m.id))
 
   // project filter: keep whole trees whose root belongs to the project
   const rootSet = projectFilter ? roots.filter(r => (r.dir ?? "") === projectFilter) : roots
 
-  const ordered = rootSet.slice().sort((a, b) => {
-    const d = pinOrder(a.id) - pinOrder(b.id)
-    if (d) return d
-    return (treeBusy(b) - treeBusy(a)) || (treeRec(b) - treeRec(a))
-  })
+  const ordered = rootSet.slice().sort((a, b) => (treeBusy(b) - treeBusy(a)) || (treeRec(b) - treeRec(a)))
 
-  // one chunk per root tree — a column always starts with a new session
-  const chunks = []
+  const rows = []       // {n, depth, compact}
   let compactUsed = 0, hiddenOld = 0
-
-  // Split a busy tree into dispatch cards: one per running/waiting session
-  // (session + its non-running descendants), cutting nested running sessions
-  // out as their own cards. Leftover units form the tree's residual chunk.
-  const collectCard = (n, depth) => {
-    const units = [{ n, depth, compact: false }]
-    const cards = []
-    let attached = 0
-    for (const c of (kids.get(n.id) ?? []).slice().sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))) {
-      if (isBusyN(c)) {
-        const r = collectCard(c, 0)
-        cards.push(r.units, ...r.cards)
-      } else {
-        const r = collectCard(c, depth + 1)
-        units.push(...r.units)
-        cards.push(...r.cards)
-        attached++
-      }
-    }
-    units[0] = { ...units[0], kidsShown: attached }
-    return { units, cards }
-  }
-  const pushChunk = (units, extra) => {
-    if (!units.length) return
-    const openFeed = units.some(u => expanded.has(u.n.id))
-    const detached = !!extra?.detached
-    chunks.push({
-      units: units.map(u => ({ ...u, detached })),
-      weight: units.length + (openFeed ? 10 : 0),
-      ...extra,
-    })
-  }
-
   for (const r of ordered) {
     if (treeFull(r)) {
-      if (isBusyN(r)) {
-        const res = collectCard(r, 0)
-        pushChunk(res.units, { special: true })                    // root card (+ non-running descendants)
-        for (const card of res.cards) pushChunk(card, { special: true, detached: true })
-      } else {
-        const res = collectCard(r, 0)
-        if (res.cards.length) {
-          pushChunk(res.units)                                     // residual: root + non-running branches
-          for (const card of res.cards) pushChunk(card, { special: true, detached: true })
-        } else {
-          pushChunk(res.units)
-        }
+      const walk = (n, depth) => {
+        rows.push({ n, depth, compact: false })
+        for (const c of (kids.get(n.id) ?? []).slice().sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))) walk(c, depth + 1)
       }
+      walk(r, 0)
     } else if (showAllOld || compactUsed < COMPACT_CAP) {
-      chunks.push({ units: [{ n: r, depth: 0, compact: true }], weight: 1 })
+      rows.push({ n: r, depth: 0, compact: true })
       compactUsed++
     } else hiddenOld++
   }
 
-  // independent columns. Dispatch phase: special chunks (pinned trees, and
-  // running/waiting session cards — one per live session, cut out of their
-  // tree) are dealt round-robin onto the column tops in global order, so
-  // every running session lands on a distinct column top. Fill phase: the
-  // rest is cut into contiguous balanced runs, one per column — a session
-  // never spans two columns.
-  let colCount = gridCols
-  if (window.innerWidth < 1150) colCount = 1
-  colCount = Math.max(1, Math.min(colCount, chunks.length))
-
-  const specials = chunks.filter(c => c.special)
-  const rest = chunks.filter(c => !c.special)
-
-  const cols = Array.from({ length: colCount }, () => ({ units: [] }))
-  specials.forEach((ch, j) => cols[j % colCount].units.push(...ch.units))
-
-  if (rest.length) {
-    const runs = Math.min(colCount, rest.length)
-    const total = rest.reduce((s, c) => s + c.weight, 0)
-    const target = total / runs
-    const bounds = [0]
-    let acc = 0
-    for (let i = 0; i < rest.length && bounds.length < runs; i++) {
-      acc += rest[i].weight
-      if (acc >= target && rest.length - (i + 1) >= runs - bounds.length) {
-        bounds.push(i + 1)
-        acc = 0
-      }
-    }
-    bounds.push(rest.length)
-    for (let r = 0; r < bounds.length - 1; r++) {
-      const runChunks = rest.slice(bounds[r], bounds[r + 1])
-      if (runChunks.length) cols[r].units.push(...runChunks.flatMap(c => c.units))
-    }
-  }
-  const visible = cols.filter(c => c.units.length)
-
   const scrollState = captureScroll()
-  pb.innerHTML = projectFilter
-    ? `<div class="pbar">project <b>${esc(basename(projectFilter))}</b>` +
+  let html = ""
+  if (projectFilter) {
+    html += `<div class="pbar">project <b>${esc(basename(projectFilter))}</b>` +
       `<button class="mini" data-clearproj="1">✕ all projects</button></div>`
-    : ""
-  if (visible.length <= 1) {
-    el.className = ""
-    el.innerHTML = (visible[0]?.units ?? []).map(u => rowHTML(u, kids)).join("")
-  } else {
-    el.className = "grid"
-    el.innerHTML = visible.map(c => `<div class="col">${c.units.map(u => rowHTML(u, kids)).join("")}</div>`).join("")
   }
-  mb.innerHTML = hiddenOld > 0 ? `<div class="more" data-more="1">show ${hiddenOld} older sessions</div>` : ""
+  html += rows.map(({ n, depth, compact }) => rowHTML(n, depth, compact, kids)).join("")
+  if (hiddenOld > 0) html += `<div class="more" data-more="1">show ${hiddenOld} older sessions</div>`
+  el.innerHTML = html
   restoreScroll(scrollState)
 }
 
-function rowHTML(u, kids) {
-  const { n, depth, compact, detached } = u
+function rowHTML(n, depth, compact, kids) {
   const open = expanded.has(n.id)
   const color = STATUS_COLOR[n.status] ?? "#5b6472"
   const busy = isBusy(n)
-  const childRows = typeof u.kidsShown === "number" ? u.kidsShown : (kids.get(n.id) ?? []).length
+  const childRows = (kids.get(n.id) ?? []).length
   const dur = durOf(n)
   const durTxt = dur != null ? (dur > 60_000 ? Math.round(dur / 60_000) + "m" : Math.round(dur / 1000) + "s") : ""
-  const isPinned = pinned.includes(n.id)
-  const pinBtn = depth === 0
-    ? `<span class="pinbtn ${isPinned ? "on" : ""}" data-pin="${esc(n.id)}" ` +
-      `title="${isPinned ? "unpin" : "pin to top of grid"}">${isPinned ? "◆" : "◇"}</span>`
-    : ""
   const pname = n.dir ? basename(n.dir) : "unknown"
   const pcol = projectColor(pname)
-  const subChip = detached && depth === 0 ? `<span class="tag" title="running subagent dispatched to this column">↳ sub</span>` : ""
   const proj = depth === 0
     ? `<span class="proj ${projectFilter === (n.dir ?? "") ? "on" : ""}" data-proj="${esc(n.dir ?? "")}" ` +
       `style="color:${pcol};border-color:${pcol}55" title="${esc(n.dir ?? "unknown project")} — click to filter">${esc(short(pname, 24))}</span>`
@@ -531,10 +368,8 @@ function rowHTML(u, kids) {
     proj +
     `<b>${esc(agentLabel(n))}</b>` +
     `<span class="title" title="${esc(titleOf(n))}">${esc(short(titleOf(n), 56))}</span>` +
-    subChip +
     `<span class="chip ${esc(n.status)}">${esc(n.status)}${durTxt && busy ? " " + durTxt : ""}</span>` +
     `<span class="meta">${kfmt(n.tokens?.input ?? 0)}→${kfmt(n.tokens?.output ?? 0)} tok · $${(n.cost ?? 0).toFixed(3)}${compact ? "" : durTxt && !busy ? " · " + durTxt : ""}${childRows ? " · " + childRows + "▸" : ""}</span>` +
-    pinBtn +
     `</div>`
 
   if (!compact) {
@@ -549,7 +384,7 @@ function rowHTML(u, kids) {
   }
 
   const unit = `<div class="unit">` +
-    `<div class="row ${busy ? "busy" : ""} ${compact ? "compact" : ""} ${open ? "open" : ""} ${isPinned && depth === 0 ? "pinned" : ""} ${depth ? "indent" : ""}" data-toggle="${esc(n.id)}">` +
+    `<div class="row ${busy ? "busy" : ""} ${compact ? "compact" : ""} ${open ? "open" : ""} ${depth ? "indent" : ""}" data-toggle="${esc(n.id)}">` +
     inner + `</div>` +
     (open ? feedHTML(n, kids) : "") +
     `</div>`
@@ -655,11 +490,9 @@ function streamTick(sid, t) {
   feed.querySelector(".hint")?.remove()
   const box = feed.querySelector(".ticks")
   if (!box) return
-  const wasBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 60
   const existing = box.querySelector(`[data-tick="${cssEsc(t.id)}"]`)
   if (existing) existing.outerHTML = tickHTML(t)
   else box.insertAdjacentHTML("beforeend", tickHTML(t))
-  if (wasBottom || box.scrollHeight <= box.clientHeight) box.scrollTop = box.scrollHeight
   if (t.status === "running") {
     const sub = document.querySelector(`[data-toggle="${cssEsc(sid)}"] .sub`)
     if (sub) sub.textContent = "└ " + t.name + (t.detail ? ": " + short(t.detail, 100) : "")

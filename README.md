@@ -5,22 +5,20 @@
 
 Live HTML dashboard for [OpenCode](https://opencode.ai) — **agent flow, cooperation, and task progression**. Every running session at a glance; click any session to hook in and watch tool calls and assistant output stream in real time.
 
-![Agent Flow dashboard](docs/screenshot-grid.png)
+![Agent Flow dashboard](docs/screenshot.png)
 
 One OpenCode plugin, zero build step. The plugin runs inside the OpenCode server process, folds the event stream into a small graph model, exposes it over RPC, and serves the dashboard from a local sidecar — the browser needs no token and no CORS setup.
 
 ## What it shows
 
-- **Sessions grid** — one configurable grid (1/2/3 columns, persisted). Active sessions are **dispatched round-robin onto the column tops** (so every column leads with a live session when there are enough), then the remaining list fills each column as a contiguous run: running/waiting first (never truncated), then recently active, then older sessions as compact dimmed cards. Subagents render indented under their parent with the spawn (`└`) marker; a session never spans two columns.
-- **Pinning** — every root card has a pin toggle (`◇`/`◆`): pinned sessions float to the top of the grid in pin order with an accent border, survive reloads, and render full-depth even when stale.
-- **Per-card glance** — status dot + chip, colored project badge (click to filter), agent, title, tokens and cost, duration, current action (the tool running right now), `flow_task` chips, reviewer/critic `⌘ VERDICT` and `⚑` lines, errors.
+- **Sessions list** — running/waiting sessions first (never truncated), then recently active, then older sessions as compact rows. Subagents render indented under their parent with the spawn (`└`) marker.
+- **Per-row glance** — status dot + chip, agent, title, project tag (when sessions span multiple projects), tokens and cost, duration, current action (the tool running right now), `flow_task` chips, reviewer/critic `⌘ VERDICT` and `⚑` lines, errors.
 - **Hook in** — click a session to expand a live feed in place:
   - summary line: status · steps · tools · started · cost · tokens · permission asks · subagent count
   - per-session tool-call timeline: time, tool, detail, duration, ✓/✗/●
   - **live output** — the streaming assistant text, auto-following the tail
   - subagent sessions below can be hooked into as well
 - **`collapse all`** — one click closes every open feed.
-- **Deep links** — `?expand=<sessionID>` opens feeds directly; `?static=1` renders a single snapshot with no live loop (embedding/screenshots).
 - Streaming is event-driven: the plugin pushes per-session activity over the existing event stream; hooked feeds update with no full-page refresh, and everything else reconciles in the background.
 
 ## Install
