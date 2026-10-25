@@ -29,16 +29,14 @@
   .mini.on { color:#e8ecf3; border-color:#60a5fa; }
   .mini.off { opacity:.35; pointer-events:none; }
 
-  /* grid */
-  #list.cols-2 { columns:2; column-gap:12px; }
-  #list.cols-3 { columns:3; column-gap:12px; }
-  @media (max-width:1150px) { #list.cols-2, #list.cols-3 { columns:1; } }
-  .unit { break-inside:avoid; }
-  .row.pinned { border-color:rgba(251,191,36,.45); box-shadow:inset 2px 0 0 rgba(251,191,36,.55); }
+  /* grid: explicit column containers — a column always starts with a new session */
+  #list.grid { display:flex; gap:12px; align-items:flex-start; }
+  #list.grid .col { flex:1 1 0; min-width:0; }
+  #list.grid .ticks { max-height:340px; overflow-y:auto; }
   .pinbtn { flex:none; cursor:pointer; color:#3f4655; font-size:11px; padding:0 2px; user-select:none; }
   .pinbtn:hover { color:#c7cdd8; }
   .pinbtn.on { color:#fbbf24; }
-  #list.cols-2 .ticks, #list.cols-3 .ticks { max-height:340px; overflow-y:auto; }
+  .row.pinned { border-color:rgba(251,191,36,.45); box-shadow:inset 2px 0 0 rgba(251,191,36,.55); }
 
   .unit { margin-bottom:8px; }
   .row { background:#1c1f26; border:1px solid #2d3340; border-radius:8px; padding:8px 11px; cursor:pointer;
@@ -103,7 +101,7 @@
     <h1>AGENT&nbsp;FLOW</h1>
     <div class="totals" id="totals"></div>
   </header>
-  <div class="panel">
+  <div class="panel" id="sessionPanel">
     <div class="ph">
       <h2>Sessions · click to hook in</h2>
       <div class="ph-r">
@@ -115,7 +113,7 @@
       </div>
     </div>
     <div id="pbar"></div>
-    <div id="list" class="cols-2"></div>
+    <div id="list"></div>
     <div id="morebar"></div>
   </div>
 </div>
@@ -268,8 +266,9 @@ fetchSnapshot().then(() => setConn("live")).catch(() => {
   fetchSnapshot().then(() => setConn("live")).catch(() => setConn("offline"))
 })
 
-// click: toggle the hook-in feed
-document.getElementById("list").addEventListener("click", e => {
+// click: hook-in feeds, pins, project filter, older sessions (delegated on the
+// panel so pbar/morebar work too)
+document.getElementById("sessionPanel").addEventListener("click", e => {
   if (e.target.closest("[data-more]")) { showAllOld = true; render(); return }
   const clear = e.target.closest("[data-clearproj]")
   if (clear) { projectFilter = null; render(); return }
@@ -315,8 +314,6 @@ window.addEventListener("resize", () => { clearTimeout(rsTimer); rsTimer = setTi
 // ------------------------------------------------------------- rendering
 function render() {
   if (!model) return
-  const list = document.getElementById("list")
-  list.className = "cols-" + gridCols
   document.body.classList.toggle("wide", gridCols > 1)
   document.querySelectorAll("[data-cols]").forEach(b => b.classList.toggle("on", Number(b.dataset.cols) === gridCols))
   renderTotals()
@@ -368,6 +365,7 @@ function renderList() {
   if (!ns.length) {
     pb.innerHTML = ""
     mb.innerHTML = ""
+    el.className = ""
     el.innerHTML = '<div class="empty">no sessions yet — run an agent</div>'
     return
   }
@@ -395,19 +393,35 @@ function renderList() {
     return (treeBusy(b) - treeBusy(a)) || (treeRec(b) - treeRec(a))
   })
 
-  const rows = []       // {n, depth, compact}
+  // one chunk per root tree — a column always starts with a new session
+  const chunks = []
   let compactUsed = 0, hiddenOld = 0
   for (const r of ordered) {
     if (treeFull(r)) {
+      const units = []
       const walk = (n, depth) => {
-        rows.push({ n, depth, compact: false })
+        units.push({ n, depth, compact: false })
         for (const c of (kids.get(n.id) ?? []).slice().sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))) walk(c, depth + 1)
       }
       walk(r, 0)
+      const openFeed = units.some(u => expanded.has(u.n.id))
+      chunks.push({ units, weight: units.length + (openFeed ? 10 : 0) })
     } else if (showAllOld || compactUsed < COMPACT_CAP) {
-      rows.push({ n: r, depth: 0, compact: true })
+      chunks.push({ units: [{ n: r, depth: 0, compact: true }], weight: 1 })
       compactUsed++
     } else hiddenOld++
+  }
+
+  // explicit columns, greedily balanced by weight (order-preserving)
+  let colCount = gridCols
+  if (window.innerWidth < 1150) colCount = 1
+  colCount = Math.max(1, Math.min(colCount, chunks.length))
+  const cols = Array.from({ length: colCount }, () => ({ w: 0, units: [] }))
+  for (const ch of chunks) {
+    let min = 0
+    for (let i = 1; i < cols.length; i++) if (cols[i].w < cols[min].w) min = i
+    cols[min].w += ch.weight
+    cols[min].units.push(...ch.units)
   }
 
   const scrollState = captureScroll()
@@ -415,7 +429,13 @@ function renderList() {
     ? `<div class="pbar">project <b>${esc(basename(projectFilter))}</b>` +
       `<button class="mini" data-clearproj="1">✕ all projects</button></div>`
     : ""
-  el.innerHTML = rows.map(({ n, depth, compact }) => rowHTML(n, depth, compact, kids)).join("")
+  if (colCount === 1) {
+    el.className = ""
+    el.innerHTML = cols[0].units.map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")
+  } else {
+    el.className = "grid"
+    el.innerHTML = cols.map(c => `<div class="col">${c.units.map(u => rowHTML(u.n, u.depth, u.compact, kids)).join("")}</div>`).join("")
+  }
   mb.innerHTML = hiddenOld > 0 ? `<div class="more" data-more="1">show ${hiddenOld} older sessions</div>` : ""
   restoreScroll(scrollState)
 }
